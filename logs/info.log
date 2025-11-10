@@ -714,3 +714,7 @@
 [INFO] 2025-11-10T10:42:45.371Z - ✅ User connected - ID: 690437196ac641da860d3730, Socket: o18oRn30hXyM1PYUAAAN ""
 [INFO] 2025-11-10T10:42:45.372Z - User 690437196ac641da860d3730 joined room: 690437196ac641da860d3730 ""
 [INFO] 2025-11-10T10:42:45.373Z - 👥 Active connections: 1 ""
+[INFO] 2025-11-10T10:57:59.582Z - 🔌 Socket.IO server initialized ""
+[INFO] 2025-11-10T10:57:59.758Z - Database connected successfully ""
+[INFO] 2025-11-10T10:57:59.761Z - Server is running on port 3000 ""
+[INFO] 2025-11-10T10:57:59.762Z - WebSocket server is ready on port 3000 ""

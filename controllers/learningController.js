@@ -7,7 +7,7 @@ const { calculateNextReview } = require('../utils/spacedRepetition');
       const { vocabId, quality } = req.body;
       const userId = req.user.id;
 
-      let  progress = new LearningProgress({
+      let progress = new LearningProgress({
           userId,
           vocabId,
           repetitionCount: 0,

@@ -49,6 +49,10 @@ app.use('/api/learning', require('./routes/learningRoutes'));
 app.use('/api/topics', require('./routes/topicRoutes')); // Add this line
 app.use('/api/user', require('./routes/userRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
+app.use('/api/battle', require('./routes/battleRoutes'));
+app.get('/api/health', (req,res)=>res.json({ok:true}));
+
+
 // Connect to MongoDB
 const PORT = process.env.PORT || 3000;
 
@@ -57,9 +61,8 @@ const startServer = async () => {
     await connectDB();
     logger.info('Database connected successfully');
 
-    server.listen(PORT, () => {
-      logger.info(`Server is running on port ${PORT}`);
-      logger.info(`WebSocket server is ready on port ${PORT}`);
+    server.listen(PORT, '0.0.0.0', () => {
+      logger.info(`Server is running on http://localhost:${PORT}`);
     });
   } catch (error) {
     logger.error('Failed to start server:', error);

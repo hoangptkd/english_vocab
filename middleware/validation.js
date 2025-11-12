@@ -17,10 +17,6 @@ const topicValidation = {
             .trim()
             .notEmpty().withMessage('Topic name is required')
             .isLength({ min: 2, max: 100 }).withMessage('Name must be 2-100 characters'),
-        body('slug')
-            .trim()
-            .notEmpty().withMessage('Slug is required')
-            .matches(/^[a-z0-9-]+$/).withMessage('Slug must contain only lowercase letters, numbers and hyphens'),
         body('description')
             .optional()
             .trim()

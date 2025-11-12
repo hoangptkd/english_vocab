@@ -169,6 +169,10 @@ exports.updateProgress = async (req, res) => {
     } else if (progress.repetitionCount > 0) {
       progress.status = 'learning';
     }
+    // Điều kiện chuyển sang trạng thái 'mastered'
+    if (progress.easinessFactor >= 3.0 && progress.repetitionCount >= 5) {
+      progress.status = 'mastered';
+    }
 
     if (quality >= 4) {
       progress.correctCount += 1;

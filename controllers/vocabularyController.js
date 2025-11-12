@@ -2,7 +2,7 @@ const Vocabulary = require('../models/Vocabulary');
 const LearningProgress = require('../models/LearningProgress');
 const mongoose = require('mongoose');
 const User = require("../models/User");
-
+const Topic = require("../models/Topic");
 exports.getNewVocabs = async (req, res) => {
   try {
     const { topicId, limit = 10 } = req.query;
@@ -79,12 +79,19 @@ exports.getReviewVocabs = async (req, res) => {
 
 exports.searchVocabs = async (req, res) => {
   try {
-    const { query, page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, search, level, topicId } = req.query;
 
     let vocabs;
-
+    let query = {};
+    // Thêm filter level nếu có
+    if (level) query.level = level;
+    // Thêm filter topicId nếu có
+    if (topicId) query.topics = { $in: [new mongoose.Types.ObjectId(topicId)] };
+    if (search) {
+      query.$text = { $search: search };
+    }
     // Nếu query rỗng, trả về tất cả vocabularies
-    if (!query || query.trim() === '') {
+    if (!query) {
       vocabs = await Vocabulary.find()
           .populate('topics', 'name slug')
           .sort({ word: 1 }) // Sort alphabetically
@@ -92,7 +99,7 @@ exports.searchVocabs = async (req, res) => {
     } else {
       // Tìm kiếm với full-text search
       vocabs = await Vocabulary.find(
-          { $text: { $search: query } },
+            query,
           { score: { $meta: "textScore" } }
       )
           .populate('topics', 'name slug')

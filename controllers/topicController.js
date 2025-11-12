@@ -49,14 +49,17 @@ exports.getTopicById = async (req, res) => {
 // CREATE topic (admin only)
 exports.createTopic = async (req, res) => {
   try {
-    const { name, slug, description } = req.body;
+    console.log('📩 Received body:', req.body);
 
-    // Check if slug already exists
-    const existingTopic = await Topic.findOne({ slug });
-    if (existingTopic) {
-      return res.status(400).json({ message: 'Topic slug already exists' });
-    }
+    const { name, description } = req.body;
+    // thay the khoang cach bang dau gach ngang va chuyen ve chu thuong
+    const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
 
+    // // Check if slug already exists
+    // const existingTopic = await Topic.findOne({ slug });
+    // if (existingTopic) {
+    //   return res.status(400).json({ message: 'Topic slug already exists' });
+    // }
     const topic = new Topic({
       name,
       slug,

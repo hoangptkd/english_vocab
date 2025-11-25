@@ -11,7 +11,17 @@ const vocabularySchema = new mongoose.Schema({
     enum: ['beginner', 'intermediate', 'advanced'], 
     default: 'beginner' 
   },
-    topics: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Topic' }]
+  // 🔊 NEW: Audio URL
+  audioUrl: {
+    type: String,
+    default: null
+  },
+  audioSource: {
+    type: String,
+    enum: ['pre-recorded', 'tts', null],
+    default: null
+  },
+  topics: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Topic' }]
 
 }, { timestamps: true });
 vocabularySchema.index({ topics: 1, level: 1, word: 1 });

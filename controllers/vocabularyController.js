@@ -81,42 +81,40 @@ exports.searchVocabs = async (req, res) => {
   try {
     const { page = 1, limit = 10, search, level, topicId } = req.query;
 
-    let vocabs;
-    let query = {};
-    // Thêm filter level nếu có
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = {};
     if (level) query.level = level;
-    // Thêm filter topicId nếu có
     if (topicId) query.topics = { $in: [new mongoose.Types.ObjectId(topicId)] };
+    if (search) query.$text = { $search: search };
+
+    let vocabsQuery = Vocabulary.find(query).populate('topics', 'name slug');
+
     if (search) {
-      query.$text = { $search: search };
-    }
-    // Nếu query rỗng, trả về tất cả vocabularies
-    if (!query) {
-      vocabs = await Vocabulary.find()
-          .populate('topics', 'name slug')
-          .sort({ word: 1 }) // Sort alphabetically
-          .limit(parseInt(limit));
+      // chỉ khi có $text mới lấy textScore
+      vocabsQuery = vocabsQuery
+          .select({ score: { $meta: 'textScore' } })
+          .sort({ score: { $meta: 'textScore' } });
     } else {
-      // Tìm kiếm với full-text search
-      vocabs = await Vocabulary.find(
-            query,
-          { score: { $meta: "textScore" } }
-      )
-          .populate('topics', 'name slug')
-          .sort({ score: { $meta: "textScore" } })
-          .limit(parseInt(limit));
+      // không có $text thì sort thường
+      vocabsQuery = vocabsQuery.sort({ word: 1 });
     }
 
-    const total = await Vocabulary.countDocuments(query);
+    const [vocabs, total] = await Promise.all([
+      vocabsQuery.skip(skip).limit(limitNum),
+      Vocabulary.countDocuments(query),
+    ]);
 
     res.json({
       vocabs,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / limit)
-      }
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum),
+      },
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

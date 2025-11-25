@@ -52,6 +52,7 @@ app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/battle', require('./routes/battleRoutes'));
 app.get('/api/health', (req,res)=>res.json({ok:true}));
 app.use('/api/statistics', require('./routes/statisticsRoutes'));
+app.use('/api/audio', require('./routes/audioRoutes'));
 
 
 // Connect to MongoDB

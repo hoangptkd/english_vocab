@@ -108,7 +108,403 @@ async function uploadToS3(audioBuffer, key) {
     }
 }
 
-// ============= API ENDPOINTS =============
+/**
+ * Upload một file audio lên S3
+ */
+async function uploadFileToS3(filePath, fileName) {
+    try {
+        const fileContent = fs.readFileSync(filePath);
+        const normalizedFileName = fileName.toLowerCase().replace(/[^a-z0-9.]/g, '_');
+        const s3Key = `audio/${normalizedFileName}`;
+
+        await s3.putObject({
+            Bucket: AUDIO_CONFIG.S3_BUCKET.name,
+            Key: s3Key,
+            Body: fileContent,
+            ContentType: 'audio/mpeg',
+            CacheControl: 'max-age=31536000', // 1 year
+        }).promise();
+
+        const cdnUrl = `${AUDIO_CONFIG.S3_BUCKET.cdnUrl}/${s3Key}`;
+
+        return {
+            success: true,
+            fileName,
+            s3Key,
+            url: cdnUrl,
+            size: fileContent.length,
+        };
+    } catch (error) {
+        return {
+            success: false,
+            fileName,
+            error: error.message,
+        };
+    }
+}
+
+/**
+ * Lấy danh sách tất cả file audio trong thư mục
+ */
+function getAudioFiles(directory) {
+    const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a'];
+    const files = [];
+
+    function scanDirectory(dir) {
+        const items = fs.readdirSync(dir);
+
+        for (const item of items) {
+            const fullPath = path.join(dir, item);
+            const stat = fs.statSync(fullPath);
+
+            if (stat.isDirectory()) {
+                // Đệ quy vào thư mục con
+                scanDirectory(fullPath);
+            } else if (stat.isFile()) {
+                const ext = path.extname(item).toLowerCase();
+                if (audioExtensions.includes(ext)) {
+                    files.push({
+                        fullPath,
+                        fileName: item,
+                        relativePath: path.relative(directory, fullPath),
+                        size: stat.size,
+                    });
+                }
+            }
+        }
+    }
+
+    scanDirectory(directory);
+    return files;
+}
+
+/**
+ * ⚡ Upload files song song với giới hạn concurrency
+ */
+async function uploadFilesInParallel(files, concurrency = 10) {
+    const results = [];
+    const queue = [...files];
+    let completed = 0;
+    let inProgress = 0;
+
+    return new Promise((resolve) => {
+        const processNext = async () => {
+            if (queue.length === 0 && inProgress === 0) {
+                resolve(results);
+                return;
+            }
+
+            while (inProgress < concurrency && queue.length > 0) {
+                inProgress++;
+                const file = queue.shift();
+
+                uploadFileToS3(file.fullPath, file.fileName)
+                    .then(result => {
+                        results.push(result);
+                        completed++;
+                        
+                        if (result.success) {
+                            console.log(`✅ [${completed}/${files.length}] Uploaded: ${file.fileName}`);
+                        } else {
+                            console.error(`❌ [${completed}/${files.length}] Failed: ${file.fileName} - ${result.error}`);
+                        }
+                        
+                        inProgress--;
+                        processNext();
+                    })
+                    .catch(error => {
+                        results.push({
+                            success: false,
+                            fileName: file.fileName,
+                            error: error.message,
+                        });
+                        completed++;
+                        console.error(`❌ [${completed}/${files.length}] Error: ${file.fileName}`);
+                        inProgress--;
+                        processNext();
+                    });
+            }
+        };
+
+        processNext();
+    });
+}
+
+// ============= API ENDPOINTS - Thêm vào cuối file trước module.exports =============
+
+/**
+ * POST /api/audio/upload-all
+ * Upload tất cả file audio từ thư mục local lên S3
+ */
+router.post('/upload-all', async (req, res) => {
+    try {
+        const { directory, dryRun = false } = req.body;
+
+        // Sử dụng thư mục từ env hoặc từ request
+        const sourceDir = directory || process.env.LOCAL_AUDIO_DIR || AUDIO_CONFIG.CACHE_DIR;
+
+        // Kiểm tra thư mục có tồn tại
+        if (!fs.existsSync(sourceDir)) {
+            return res.status(400).json({
+                error: 'Directory not found',
+                path: sourceDir,
+            });
+        }
+
+        // Lấy danh sách file
+        const audioFiles = getAudioFiles(sourceDir);
+
+        if (audioFiles.length === 0) {
+            return res.json({
+                message: 'No audio files found',
+                directory: sourceDir,
+            });
+        }
+
+        // Nếu dryRun, chỉ trả về danh sách file
+        if (dryRun) {
+            return res.json({
+                dryRun: true,
+                directory: sourceDir,
+                totalFiles: audioFiles.length,
+                files: audioFiles,
+                totalSize: audioFiles.reduce((sum, f) => sum + f.size, 0),
+                totalSizeMB: (audioFiles.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024)).toFixed(2),
+            });
+        }
+
+        // Upload từng file
+        const results = [];
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const file of audioFiles) {
+            const result = await uploadFileToS3(file.fullPath, file.fileName);
+            results.push(result);
+
+            if (result.success) {
+                successCount++;
+                console.log(`✅ Uploaded: ${file.fileName}`);
+            } else {
+                failCount++;
+                console.error(`❌ Failed: ${file.fileName} - ${result.error}`);
+            }
+        }
+
+        res.json({
+            success: true,
+            directory: sourceDir,
+            totalFiles: audioFiles.length,
+            successCount,
+            failCount,
+            results,
+        });
+
+    } catch (error) {
+        console.error('Upload all failed:', error);
+        res.status(500).json({
+            error: 'Failed to upload files',
+            message: error.message,
+        });
+    }
+});
+
+/**
+ * POST /api/audio/upload-single
+ * Upload một file cụ thể lên S3
+ */
+router.post('/upload-single', async (req, res) => {
+    try {
+        const { filePath, fileName } = req.body;
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'filePath is required' });
+        }
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const name = fileName || path.basename(filePath);
+        const result = await uploadFileToS3(filePath, name);
+
+        if (result.success) {
+            res.json(result);
+        } else {
+            res.status(500).json(result);
+        }
+
+    } catch (error) {
+        res.status(500).json({
+            error: 'Upload failed',
+            message: error.message,
+        });
+    }
+});
+
+/**
+ * GET /api/audio/list-local
+ * Liệt kê tất cả file audio trong thư mục local
+ */
+router.get('/list-local', (req, res) => {
+    try {
+        const { directory } = req.query;
+        const sourceDir = directory || process.env.LOCAL_AUDIO_DIR || AUDIO_CONFIG.CACHE_DIR;
+
+        if (!fs.existsSync(sourceDir)) {
+            return res.status(400).json({
+                error: 'Directory not found',
+                path: sourceDir,
+            });
+        }
+
+        const audioFiles = getAudioFiles(sourceDir);
+
+        res.json({
+            directory: sourceDir,
+            totalFiles: audioFiles.length,
+            files: audioFiles,
+            totalSize: audioFiles.reduce((sum, f) => sum + f.size, 0),
+            totalSizeMB: (audioFiles.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024)).toFixed(2),
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            error: 'Failed to list files',
+            message: error.message,
+        });
+    }
+});
+
+/**
+ * GET /api/audio/list-s3
+ * Liệt kê tất cả file audio trên S3
+ */
+router.get('/list-s3', async (req, res) => {
+    try {
+        const { prefix = 'audio/', maxKeys = 1000 } = req.query;
+
+        const params = {
+            Bucket: AUDIO_CONFIG.S3_BUCKET.name,
+            Prefix: prefix,
+            MaxKeys: parseInt(maxKeys),
+        };
+
+        const data = await s3.listObjectsV2(params).promise();
+
+        const files = data.Contents.map(item => ({
+            key: item.Key,
+            fileName: path.basename(item.Key),
+            size: item.Size,
+            lastModified: item.LastModified,
+            url: `${AUDIO_CONFIG.S3_BUCKET.cdnUrl}/${item.Key}`,
+        }));
+
+        res.json({
+            bucket: AUDIO_CONFIG.S3_BUCKET.name,
+            prefix,
+            totalFiles: files.length,
+            files,
+            totalSize: files.reduce((sum, f) => sum + f.size, 0),
+            totalSizeMB: (files.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024)).toFixed(2),
+            isTruncated: data.IsTruncated,
+        });
+
+    } catch (error) {
+        console.error('List S3 failed:', error);
+        res.status(500).json({
+            error: 'Failed to list S3 files',
+            message: error.message,
+        });
+    }
+});
+
+/**
+ * POST /api/audio/sync
+ * Đồng bộ: Upload các file local chưa có trên S3
+ * ⚡ OPTIMIZED: Parallel upload
+ */
+router.post('/sync', async (req, res) => {
+    try {
+        const { directory, dryRun = false, concurrency = 10 } = req.body;
+        const sourceDir = directory || process.env.LOCAL_AUDIO_DIR || AUDIO_CONFIG.CACHE_DIR;
+
+        if (!fs.existsSync(sourceDir)) {
+            return res.status(400).json({
+                error: 'Directory not found',
+                path: sourceDir,
+            });
+        }
+
+        // Lấy danh sách file local
+        const localFiles = getAudioFiles(sourceDir);
+
+        // Lấy danh sách file trên S3
+        const s3Data = await s3.listObjectsV2({
+            Bucket: AUDIO_CONFIG.S3_BUCKET.name,
+            Prefix: 'audio/',
+        }).promise();
+
+        const s3FileNames = new Set(
+            s3Data.Contents.map(item => path.basename(item.Key).toLowerCase())
+        );
+
+        // Tìm file cần upload (chưa có trên S3)
+        const filesToUpload = localFiles.filter(file => {
+            const normalizedName = file.fileName.toLowerCase().replace(/[^a-z0-9.]/g, '_');
+            return !s3FileNames.has(normalizedName);
+        });
+
+        if (filesToUpload.length === 0) {
+            return res.json({
+                message: 'All files are already on S3',
+                totalLocalFiles: localFiles.length,
+                totalS3Files: s3Data.Contents.length,
+            });
+        }
+
+        // Nếu dryRun, chỉ trả về danh sách
+        if (dryRun) {
+            return res.json({
+                dryRun: true,
+                directory: sourceDir,
+                totalLocalFiles: localFiles.length,
+                totalS3Files: s3Data.Contents.length,
+                filesToUpload: filesToUpload.length,
+                files: filesToUpload,
+            });
+        }
+
+        // ⚡ Upload song song
+        const startTime = Date.now();
+        const results = await uploadFilesInParallel(filesToUpload, concurrency);
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+        const successCount = results.filter(r => r.success).length;
+        const failCount = results.filter(r => !r.success).length;
+
+        res.json({
+            success: true,
+            directory: sourceDir,
+            totalLocalFiles: localFiles.length,
+            totalS3Files: s3Data.Contents.length,
+            filesUploaded: filesToUpload.length,
+            successCount,
+            failCount,
+            duration: `${duration}s`,
+            averageSpeed: `${(filesToUpload.length / duration).toFixed(2)} files/s`,
+            concurrency,
+            results,
+        });
+
+    } catch (error) {
+        console.error('Sync failed:', error);
+        res.status(500).json({
+            error: 'Sync failed',
+            message: error.message,
+        });
+    }
+});
 
 /**
  * GET /api/audio/tts

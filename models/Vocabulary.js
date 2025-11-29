@@ -1,30 +1,54 @@
 const mongoose = require('mongoose');
 
 const vocabularySchema = new mongoose.Schema({
-  word: { type: String, required: true },
-  pronunciation: String,
-  meaning: { type: String, required: true },
-  example: String,
-  imageUrl: String,
-  level: { 
+  word: { 
     type: String, 
-    enum: ['beginner', 'intermediate', 'advanced'], 
-    default: 'beginner' 
+    required: true,
+    unique: true,
+    index: true
   },
-  // 🔊 NEW: Audio URL
-  audioUrl: {
+  
+  // partOfSpeech giờ là mảng các object
+  partOfSpeech: [{
+    type: {
+      type: String,
+      enum: ['noun', 'verb', 'adjective', 'adverb', 'preposition', 'conjunction', 'pronoun', 'interjection', 'phrase'],
+      required: true
+    },
+    pronunciation: String,
+    meaning: { type: String, required: true },
+    examples: [{
+      sentence: String,
+      translation: String
+    }],
+    _id: false // Không tạo _id cho subdocument
+  }],
+  
+  imageUrl: String,
+  
+  cefrLevel: {
     type: String,
-    default: null
+    enum: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'],
+    default: 'A1',
+    index: true
   },
-  audioSource: {
-    type: String,
-    enum: ['pre-recorded', 'tts', null],
-    default: null
+  
+  popularityScore: { 
+    type: Number, 
+    default: 0, 
+    index: true 
   },
-  topics: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Topic' }]
+  
+  topics: [{ 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Topic' 
+  }]
 
 }, { timestamps: true });
-vocabularySchema.index({ topics: 1, level: 1, word: 1 });
-vocabularySchema.index({ word: 'text', meaning: 'text', example: 'text' });
+
+// Indexes
+vocabularySchema.index({ cefrLevel: 1 });
+vocabularySchema.index({ word: 'text', 'partOfSpeech.meaning': 'text', 'partOfSpeech.examples.sentence': 'text' });
+
 const Vocabulary = mongoose.model('Vocabulary', vocabularySchema);
 module.exports = Vocabulary;

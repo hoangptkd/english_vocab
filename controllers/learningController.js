@@ -2,35 +2,35 @@ const mongoose = require('mongoose');
 const LearningProgress = require('../models/LearningProgress');
 const { calculateNextReview } = require('../utils/spacedRepetition');
 
-  exports.startLearning = async (req, res) => {
-    try {
-      const { vocabId, quality } = req.body;
-      const userId = req.user.id;
+exports.startLearning = async (req, res) => {
+try {
+  const { vocabId, quality } = req.body;
+  const userId = req.user.id;
 
-      let progress = new LearningProgress({
-          userId,
-          vocabId,
-          repetitionCount: 0,
-          correctCount: 0,
-          incorrectCount: 0,
-          status: 'learning'
-        });
-        await progress.save();
+  let progress = new LearningProgress({
+      userId,
+      vocabId,
+      repetitionCount: 0,
+      correctCount: 0,
+      incorrectCount: 0,
+      status: 'learning'
+    });
+    await progress.save();
 
 
-      const {
-        nextInterval,
-        newEasinessFactor
-      } = calculateNextReview(quality, progress.easinessFactor, progress.interval);
+  const {
+    nextInterval,
+    newEasinessFactor
+  } = calculateNextReview(quality, progress.easinessFactor, progress.interval);
 
-      progress.interval = nextInterval;
-      progress.easinessFactor = newEasinessFactor;
-      await progress.save();
-      res.json(progress);
-    } catch (error) {
-      res.status(500).json({ message: 'Server error', error: error.message });
-    }
-  };
+  progress.interval = nextInterval;
+  progress.easinessFactor = newEasinessFactor;
+  await progress.save();
+  res.json(progress);
+} catch (error) {
+  res.status(500).json({ message: 'Server error', error: error.message });
+}
+};
 
 exports.getStats = async (req, res) => {
   try {
@@ -138,7 +138,7 @@ exports.getStats = async (req, res) => {
 
 exports.updateProgress = async (req, res) => {
   try {
-    const { vocabId, isCorrect } = req.body;
+    const { vocabId, isCorrect, methodType } = req.body;
     const userId = req.user.id;
     if (!mongoose.Types.ObjectId.isValid(vocabId)) {
       return res.status(400).json({ message: 'Invalid vocabId format' });
@@ -148,11 +148,27 @@ exports.updateProgress = async (req, res) => {
       return res.status(404).json({ message: 'Learning progress not found. Please start learning first.' });
     }
 
-    // Tự động xác định quality dựa trên kết quả
-    // isCorrect = true => quality = 5 (hoàn hảo)
-    // isCorrect = false => quality = 2 (khó nhớ)
-    const quality = isCorrect ? 5 : 2;
-
+    let quality;
+    if (!isCorrect) {
+      quality = 2;
+    } else {
+      switch (methodType) {
+          case 'mc_word_meaning':        // dễ
+              quality = 4;
+              break;
+          case 'mc_meaning_word':
+              quality = 4.5;
+              break;
+          case 'fill_blank':             // khó hơn
+              quality = 5;
+              break;
+          case 'sentence_completion':    // khó nhất
+              quality = 5.5; // nếu bạn muốn cho hơn 5 chút, hoặc vẫn để 5
+              break;
+          default:
+              quality = 4;
+      }
+    }
     const {
       nextInterval,
       newEasinessFactor

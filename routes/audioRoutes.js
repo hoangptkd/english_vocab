@@ -13,10 +13,10 @@ const crypto = require('crypto');
 // ============= CONFIGURATION =============
 const AUDIO_CONFIG = {
     // Google Cloud TTS
-    GOOGLE_TTS: {
-        projectId: process.env.GOOGLE_PROJECT_ID,
-        keyFilename: process.env.GOOGLE_KEY_FILE,
-    },
+    // GOOGLE_TTS: {
+    //     projectId: process.env.GOOGLE_PROJECT_ID,
+    //     keyFilename: process.env.GOOGLE_KEY_FILE,
+    // },
 
     // AWS Polly (Alternative)
     AWS_POLLY: {
@@ -52,11 +52,11 @@ const VOICE_MAP = {
     }
 };
 
-// Initialize clients
-const googleTTSClient = new TextToSpeechClient({
-    projectId: AUDIO_CONFIG.GOOGLE_TTS.projectId,
-    keyFilename: AUDIO_CONFIG.GOOGLE_TTS.keyFilename,
-});
+// // Initialize clients
+// const googleTTSClient = new TextToSpeechClient({
+//     projectId: AUDIO_CONFIG.GOOGLE_TTS.projectId,
+//     keyFilename: AUDIO_CONFIG.GOOGLE_TTS.keyFilename,
+// });
 
 const s3 = new AWS.S3({
     region: AUDIO_CONFIG.AWS_POLLY.region,
@@ -560,10 +560,10 @@ router.get('/tts', async (req, res) => {
 
         // Generate using selected provider
         if (provider === 'google') {
-            audioBuffer = await generateGoogleTTS(text, language, voice, {
-                speed: parseFloat(speed),
-                pitch: parseFloat(pitch),
-            });
+            // audioBuffer = await generateGoogleTTS(text, language, voice, {
+            //     speed: parseFloat(speed),
+            //     pitch: parseFloat(pitch),
+            // });
         } else if (provider === 'aws') {
             audioBuffer = await generateAWSPolly(text, language, voice);
         } else {
@@ -651,96 +651,95 @@ router.get('/word/:word', async (req, res) => {
  * POST /api/audio/batch
  * Generate audio for multiple words (for pre-warming cache)
  */
-router.post('/batch', async (req, res) => {
-    try {
-        const { words, language = 'en-US' } = req.body;
-
-        if (!Array.isArray(words) || words.length === 0) {
-            return res.status(400).json({ error: 'Words array is required' });
-        }
-
-        const results = [];
-
-        for (const word of words.slice(0, 50)) { // Limit to 50 words per request
-            try {
-                const filename = generateAudioFilename(word, language, 'default');
-                const cachePath = path.join(AUDIO_CONFIG.CACHE_DIR, filename);
-
-                if (!fs.existsSync(cachePath)) {
-                    const audioBuffer = await generateGoogleTTS(word, language);
-                    fs.writeFileSync(cachePath, audioBuffer);
-
-                    // Upload to S3
-                    const normalizedWord = word.toLowerCase().replace(/[^a-z0-9]/g, '_');
-                    const s3Key = `audio/${normalizedWord}.mp3`;
-                    const s3Url = await uploadToS3(audioBuffer, s3Key);
-
-                    results.push({
-                        word,
-                        status: 'generated',
-                        url: s3Url,
-                    });
-                } else {
-                    results.push({
-                        word,
-                        status: 'cached',
-                    });
-                }
-            } catch (error) {
-                results.push({
-                    word,
-                    status: 'failed',
-                    error: error.message,
-                });
-            }
-        }
-
-        res.json({
-            success: true,
-            results,
-            totalProcessed: results.length,
-        });
-
-    } catch (error) {
-        console.error('Batch generation failed:', error);
-        res.status(500).json({
-            error: 'Batch generation failed',
-            message: error.message,
-        });
-    }
-});
+// router.post('/batch', async (req, res) => {
+//     try {
+//         const { words, language = 'en-US' } = req.body;
+//
+//         if (!Array.isArray(words) || words.length === 0) {
+//             return res.status(400).json({ error: 'Words array is required' });
+//         }
+//
+//         const results = [];
+//
+//         for (const word of words.slice(0, 50)) { // Limit to 50 words per request
+//             try {
+//                 const filename = generateAudioFilename(word, language, 'default');
+//                 const cachePath = path.join(AUDIO_CONFIG.CACHE_DIR, filename);
+//
+//                 if (!fs.existsSync(cachePath)) {
+//                     const audioBuffer = await generateGoogleTTS(word, language);
+//                     fs.writeFileSync(cachePath, audioBuffer);
+//
+//                     // Upload to S3
+//                     const normalizedWord = word.toLowerCase().replace(/[^a-z0-9]/g, '_');
+//                     const s3Key = `audio/${normalizedWord}.mp3`;
+//                     const s3Url = await uploadToS3(audioBuffer, s3Key);
+//
+//                     results.push({
+//                         word,
+//                         status: 'generated',
+//                         url: s3Url,
+//                     });
+//                 } else {
+//                     results.push({
+//                         word,
+//                         status: 'cached',
+//                     });
+//                 }
+//             } catch (error) {
+//                 results.push({
+//                     word,
+//                     status: 'failed',
+//                     error: error.message,
+//                 });
+//             }
+//         }
+//
+//         res.json({
+//             success: true,
+//             results,
+//             totalProcessed: results.length,
+//         });
+//
+//     } catch (error) {
+//         console.error('Batch generation failed:', error);
+//         res.status(500).json({
+//             error: 'Batch generation failed',
+//             message: error.message,
+//         });
+//     }
+// });
 
 // ============= TTS GENERATION FUNCTIONS =============
 
 // Google Cloud TTS
-// Google Cloud TTS
-async function generateGoogleTTS(text, language, voiceName, options = {}) {
-    // 1. Xác định giọng mặc định dựa trên ngôn ngữ
-    let targetVoice = voiceName;
-
-    if (!targetVoice) {
-        // Nếu có trong map thì lấy, không thì fallback về logic cũ
-        targetVoice = VOICE_MAP[language]?.google || `${language}-Neural2-C`;
-    }
-
-    const request = {
-        input: { text },
-        voice: {
-            languageCode: language,
-            name: targetVoice,
-        },
-        audioConfig: {
-            audioEncoding: 'MP3',
-            speakingRate: options.speed || 1.0,
-            pitch: options.pitch || 0,
-            volumeGainDb: 0,
-            effectsProfileId: ['headphone-class-device'],
-        },
-    };
-
-    const [response] = await googleTTSClient.synthesizeSpeech(request);
-    return response.audioContent;
-}
+// async function generateGoogleTTS(text, language, voiceName, options = {}) {
+//     // 1. Xác định giọng mặc định dựa trên ngôn ngữ
+//     let targetVoice = voiceName;
+//
+//     if (!targetVoice) {
+//         // Nếu có trong map thì lấy, không thì fallback về logic cũ
+//         targetVoice = VOICE_MAP[language]?.google || `${language}-Neural2-C`;
+//     }
+//
+//     const request = {
+//         input: { text },
+//         voice: {
+//             languageCode: language,
+//             name: targetVoice,
+//         },
+//         audioConfig: {
+//             audioEncoding: 'MP3',
+//             speakingRate: options.speed || 1.0,
+//             pitch: options.pitch || 0,
+//             volumeGainDb: 0,
+//             effectsProfileId: ['headphone-class-device'],
+//         },
+//     };
+//
+//     const [response] = await googleTTSClient.synthesizeSpeech(request);
+//     return response.audioContent;
+// }
 
 // AWS Polly
 async function generateAWSPolly(text, language, voiceName) {

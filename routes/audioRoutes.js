@@ -37,6 +37,21 @@ const AUDIO_CONFIG = {
     CACHE_MAX_AGE: 30 * 24 * 60 * 60 * 1000, // 30 days
 };
 
+const VOICE_MAP = {
+    'ja-JP': {
+        google: 'ja-JP-Neural2-B', // Giọng nữ tự nhiên (Neural)
+        aws: 'Takumi'              // Giọng nam (Neural)
+    },
+    'en-US': {
+        google: 'en-US-Neural2-C',
+        aws: 'Joanna'
+    },
+    'vi-VN': {
+        google: 'vi-VN-Neural2-A',
+        aws: 'Chi' // Lưu ý: AWS 'Chi' chỉ hỗ trợ engine 'standard', không phải 'neural'
+    }
+};
+
 // Initialize clients
 const googleTTSClient = new TextToSpeechClient({
     projectId: AUDIO_CONFIG.GOOGLE_TTS.projectId,
@@ -608,7 +623,8 @@ router.get('/word/:word', async (req, res) => {
             fs.writeFileSync(cachePath, audioBuffer);
 
             // Upload to S3 for future use
-            const normalizedWord = word.toLowerCase().replace(/[^a-z0-9]/g, '_');
+            //tạm thời
+            const normalizedWord = word.replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, '_');
             const s3Key = `audio/${normalizedWord}.mp3`;
             await uploadToS3(audioBuffer, s3Key);
         }
@@ -697,12 +713,21 @@ router.post('/batch', async (req, res) => {
 // ============= TTS GENERATION FUNCTIONS =============
 
 // Google Cloud TTS
+// Google Cloud TTS
 async function generateGoogleTTS(text, language, voiceName, options = {}) {
+    // 1. Xác định giọng mặc định dựa trên ngôn ngữ
+    let targetVoice = voiceName;
+
+    if (!targetVoice) {
+        // Nếu có trong map thì lấy, không thì fallback về logic cũ
+        targetVoice = VOICE_MAP[language]?.google || `${language}-Neural2-C`;
+    }
+
     const request = {
         input: { text },
         voice: {
             languageCode: language,
-            name: voiceName || `${language}-Neural2-C`, // Default female voice
+            name: targetVoice,
         },
         audioConfig: {
             audioEncoding: 'MP3',
@@ -719,16 +744,31 @@ async function generateGoogleTTS(text, language, voiceName, options = {}) {
 
 // AWS Polly
 async function generateAWSPolly(text, language, voiceName) {
+    const defaultVoice = VOICE_MAP[language]?.aws || 'Joanna';
+    const finalVoice = voiceName || defaultVoice;
+    let engine = 'neural';
+    const standardOnlyVoices = ['Chi', 'Mizuki'];
     const params = {
         Text: text,
         OutputFormat: 'mp3',
-        VoiceId: voiceName || 'Joanna', // Default voice
+        VoiceId: finalVoice,
         LanguageCode: language,
-        Engine: 'neural', // Use neural voices for better quality
+        Engine: engine,
     };
 
-    const response = await polly.synthesizeSpeech(params).promise();
-    return response.AudioStream;
+    try {
+        const response = await polly.synthesizeSpeech(params).promise();
+        return response.AudioStream;
+    } catch (error) {
+        // Fallback: Nếu lỗi Engine not supported (ví dụ giọng cũ), thử lại với standard
+        if (error.code === 'EngineNotSupported') {
+            console.warn(`Neural engine not supported for ${finalVoice}, falling back to standard.`);
+            params.Engine = 'standard';
+            const response = await polly.synthesizeSpeech(params).promise();
+            return response.AudioStream;
+        }
+        throw error;
+    }
 }
 
 // ============= ADMIN ENDPOINTS =============

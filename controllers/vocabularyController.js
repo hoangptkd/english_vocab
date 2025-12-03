@@ -52,31 +52,6 @@ exports.getNewVocabs = async (req, res) => {
   }
 };
 
-exports.getReviewVocabs = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const now = new Date();
-
-    const reviewVocabs = await LearningProgress.find({
-      userId,
-      nextReviewDate: { $lte: now },
-      status: { $in: ['learning', 'review'] }
-    })
-    .populate({
-      path: 'vocabId',
-      populate: {
-        path: 'topics',
-        select: 'name slug'
-      }
-    })
-    .limit(10);
-
-    res.json(reviewVocabs);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-};
-
 exports.searchVocabs = async (req, res) => {
   try {
     const { page = 1, limit = 10, search, level, topicId } = req.query;

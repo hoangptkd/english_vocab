@@ -6,7 +6,6 @@ const checkRole = require('../middleware/checkRole');
 const { vocabularyValidation } = require('../middleware/validation');
 // Existing routes
 router.get('/new', auth, vocabularyController.getNewVocabs);
-router.get('/review', auth, vocabularyController.getReviewVocabs);
 
 // New routes
 router.get('/search', auth, vocabularyController.searchVocabs);

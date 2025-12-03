@@ -202,3 +202,48 @@ exports.updateProgress = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+exports.getReviewVocabs = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const now = new Date();
+
+        const reviewVocabs = await LearningProgress.find({
+            userId,
+            nextReviewDate: { $lte: now },
+            status: { $in: ['learning', 'review'] }
+        })
+            .populate({
+                path: 'vocabId',
+                populate: {
+                    path: 'topics',
+                    select: 'name slug'
+                }
+            })
+            .limit(10);
+
+        res.json(reviewVocabs);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+exports.getAllLearning = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const allLearning = await LearningProgress.find({
+            userId
+        })
+        .populate({
+            path: 'vocabId',
+            populate: {
+                path: 'topics',
+                select: 'name slug'
+            }
+        })
+        res.json(allLearning);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+}

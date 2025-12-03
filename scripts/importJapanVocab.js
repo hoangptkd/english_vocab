@@ -1,7 +1,20 @@
 const mongoose = require('mongoose');
-
+const axios = require('axios');
+require('dotenv').config();
 // ==========================================
-// 1. ĐỊNH NGHĨA MODEL (Theo Schema của bạn)
+// 1. CẤU HÌNH (CONFIG)
+// ==========================================
+const CONFIG = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    // Lưu ý: Đảm bảo Model này hỗ trợ JSON mode hoặc instruction tốt
+    OPENAI_BASE_URL: 'https://gpt3.shupremium.com/v1',
+    MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/japanese_learning',
+    BATCH_SIZE: 10,
+    DELAY_BETWEEN_BATCHES: 2000, // 2s
+    MAX_RETRIES: 3
+};
+// ==========================================
+// 2. ĐỊNH NGHĨA MODEL (Theo Schema của bạn)
 // ==========================================
 
 const topicSchema = new mongoose.Schema({
@@ -139,74 +152,184 @@ const rawData = [
 // Chuỗi kết nối MongoDB (THAY ĐỔI URL CỦA BẠN Ở ĐÂY)
 const MONGODB_URI = 'mongodb://localhost:27017/english_learning_app';
 
-async function importData() {
+// ==========================================
+// 4. HÀM GỌI OPENAI
+// ==========================================
+async function enrichJapaneseBatch(words, retryCount = 0) {
     try {
-        await mongoose.connect(MONGODB_URI);
-        console.log('✅ Đã kết nối đến MongoDB');
+        const prompt = `You are a Japanese vocabulary assistant. 
+        Input: List of words (Kanji, Hiragana Reading, Meaning).
+        
+        Task: For EACH word, provide a JSON object with:
+        1. "pronunciation": The ROMAJI reading (e.g., "watashi" for "わたし").
+        2. "popularityScore": Integer 1-10 based on daily usage frequency.
+        3. "examples": An array containing exactly 1 example object with "sentence" (Japanese) and "translation" (Vietnamese).
+        
+        Input Data:
+        ${words.map((w, i) => `${i + 1}. Kanji: ${w.word}, Reading: ${w.reading}, Meaning: ${w.meaning}`).join('\n')}
 
-        // 1. Tạo hoặc tìm Topic "Tiếng Nhật"
+        Return ONLY a valid JSON array with this exact structure (no markdown):
+        [
+          {
+            "originalIndex": 0,
+            "pronunciation": "watashi",
+            "popularityScore": 10,
+            "examples": [
+              {
+                "sentence": "私はベトナム人です。",
+                "translation": "Tôi là người Việt Nam."
+              }
+            ]
+          }
+        ]`;
+
+        const response = await axios.post(
+            `${CONFIG.OPENAI_BASE_URL}/chat/completions`,
+            {
+                model: 'gpt-4o-mini', // Hoặc 'gpt-4.1-mini' như config cũ của bạn nếu có
+                messages: [
+                    { role: 'system', content: 'You are a JSON generator. Return only raw JSON.' },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.3
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${CONFIG.OPENAI_API_KEY}`
+                }
+            }
+        );
+
+        let content = response.data.choices[0].message.content.trim();
+        // Clean markdown
+        content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+        const enrichedData = JSON.parse(content);
+
+        if (!Array.isArray(enrichedData) || enrichedData.length !== words.length) {
+            // Fallback đơn giản nếu AI trả về thiếu số lượng (hiếm gặp nếu prompt chuẩn)
+            console.warn("⚠️ AI response length mismatch. Using partial data or defaults.");
+        }
+
+        return enrichedData;
+
+    } catch (error) {
+        console.error(`Error calling OpenAI (Attempt ${retryCount + 1}):`, error.message);
+
+        if (retryCount < CONFIG.MAX_RETRIES) {
+            console.log(`Retrying in ${CONFIG.DELAY_BETWEEN_BATCHES}ms...`);
+            await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_BATCHES));
+            return enrichJapaneseBatch(words, retryCount + 1);
+        }
+        throw error;
+    }
+}
+
+// ==========================================
+// 5. HÀM IMPORT CHÍNH
+// ==========================================
+async function importVocabulary() {
+    try {
+        console.log('🚀 Starting Japanese vocabulary import...\n');
+        await mongoose.connect(CONFIG.MONGODB_URI);
+        console.log('✅ Connected to MongoDB\n');
+
+        // 1. Tạo hoặc tìm Topic
         let topic = await Topic.findOne({ slug: 'dekiru-nihongo-so-cap' });
-
         if (!topic) {
             topic = await Topic.create({
                 name: 'Dekiru Nihongo Sơ Cấp (Bài 1-4)',
                 slug: 'dekiru-nihongo-so-cap',
-                description: 'Từ vựng tiếng Nhật sơ cấp từ bài 1 đến bài 4 giáo trình Dekiru Nihongo'
+                description: 'Từ vựng tiếng Nhật sơ cấp từ bài 1 đến bài 4'
             });
-            console.log('✅ Đã tạo Topic mới:', topic.name);
+            console.log('✅ Created new Topic:', topic.name);
         } else {
-            console.log('ℹ️ Đã tìm thấy Topic:', topic.name);
+            console.log('ℹ️ Found existing Topic:', topic.name);
         }
 
-        // 2. Duyệt qua danh sách và lưu vào DB
         let successCount = 0;
         let errorCount = 0;
+        const totalBatches = Math.ceil(rawData.length / CONFIG.BATCH_SIZE);
 
-        for (const item of rawData) {
+        // 2. Xử lý theo Batch
+        for (let i = 0; i < rawData.length; i += CONFIG.BATCH_SIZE) {
+            const batch = rawData.slice(i, i + CONFIG.BATCH_SIZE);
+            const batchNumber = Math.floor(i / CONFIG.BATCH_SIZE) + 1;
+
+            console.log(`📦 Processing Batch ${batchNumber}/${totalBatches} (${batch.length} words)...`);
+
             try {
-                // Kiểm tra xem từ đã tồn tại chưa để tránh trùng lặp
-                // Logic: Upsert (Cập nhật nếu có, Tạo mới nếu chưa)
+                // Gọi AI để lấy Romaji và Examples
+                const enrichedData = await enrichJapaneseBatch(batch);
 
-                const updateData = {
-                    word: item.word,
-                    // Chỉ set cefrLevel nếu tạo mới, không override nếu đã có logic khác
-                    $setOnInsert: { cefrLevel: 'A1', popularityScore: 10 },
-                    $addToSet: { topics: topic._id }, // Thêm topic ID vào mảng topics nếu chưa có
-                    // Cập nhật partOfSpeech (Ghi đè hoặc thêm logic khác tùy bạn, ở đây mình ghi đè để đảm bảo đúng data mới)
-                    partOfSpeech: [{
-                        type: item.type,
-                        pronunciation: item.reading,
-                        meaning: item.meaning,
-                        examples: [] // Có thể thêm ví dụ sau
-                    }]
-                };
+                // Chuẩn bị operations cho bulkWrite (hiệu suất cao hơn loop từng cái)
+                const bulkOps = batch.map((item, index) => {
+                    // Logic ghép từ: Nếu Kanji giống Hiragana (ví dụ 'アメリカ') thì chỉ lấy 1, ngược lại ghép 'Kanji - Hiragana'
+                    const displayWord = (item.word === item.reading)
+                        ? item.word
+                        : `${item.word} - ${item.reading}`;
 
-                await Vocabulary.findOneAndUpdate(
-                    { word: item.word },
-                    updateData,
-                    { upsert: true, new: true, setDefaultsOnInsert: true }
-                );
+                    // Lấy dữ liệu từ AI (hoặc fallback nếu lỗi index)
+                    const aiInfo = enrichedData[index] || {
+                        pronunciation: '',
+                        popularityScore: 0,
+                        examples: []
+                    };
 
-                console.log(`Saved: ${item.word} (${item.meaning})`);
-                successCount++;
+                    return {
+                        updateOne: {
+                            filter: { word: displayWord }, // Tìm theo từ đã ghép
+                            update: {
+                                $set: {
+                                    partOfSpeech: [{
+                                        type: item.type,
+                                        pronunciation: aiInfo.pronunciation, // Romaji
+                                        meaning: item.meaning,
+                                        examples: aiInfo.examples
+                                    }],
+                                    cefrLevel: 'A1', // Mặc định sơ cấp
+                                    popularityScore: aiInfo.popularityScore
+                                },
+                                $addToSet: { topics: topic._id },
+                                $setOnInsert: { imageUrl: '' } // Chỉ set khi tạo mới
+                            },
+                            upsert: true
+                        }
+                    };
+                });
+
+                const result = await Vocabulary.bulkWrite(bulkOps);
+                successCount += (result.upsertedCount + result.modifiedCount);
+                console.log(`   ✅ Batch ${batchNumber} saved.\n`);
+
+                // Delay
+                if (i + CONFIG.BATCH_SIZE < rawData.length) {
+                    await new Promise(r => setTimeout(r, CONFIG.DELAY_BETWEEN_BATCHES));
+                }
+
             } catch (err) {
-                console.error(`❌ Lỗi khi lưu từ "${item.word}":`, err.message);
-                errorCount++;
+                console.error(`   ❌ Batch ${batchNumber} failed:`, err.message);
+                errorCount += batch.length;
             }
         }
 
         console.log('------------------------------------------------');
-        console.log(`🏁 Hoàn tất Import.`);
-        console.log(`✅ Thành công: ${successCount}`);
-        console.log(`❌ Thất bại: ${errorCount}`);
+        console.log(`🏁 Import process completed!`);
+        console.log(`✅ Processed successfully: ${successCount}`);
+        console.log(`❌ Failed: ${errorCount}`);
 
     } catch (error) {
         console.error('CRITICAL ERROR:', error);
     } finally {
         await mongoose.disconnect();
-        console.log('👋 Đã ngắt kết nối MongoDB');
+        console.log('👋 Disconnected from MongoDB');
     }
 }
 
-// Chạy hàm import
-importData();
+// Chạy script
+if (require.main === module) {
+    importVocabulary();
+}
+
+module.exports = { importVocabulary };

@@ -219,8 +219,7 @@ exports.getReviewVocabs = async (req, res) => {
                     path: 'topics',
                     select: 'name slug'
                 }
-            })
-            .limit(10);
+            });
 
         res.json(reviewVocabs);
     } catch (error) {
